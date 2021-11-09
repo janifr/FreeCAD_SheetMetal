@@ -1,2 +1,4 @@
 *.pyc
 /SheetMetal2.py
+/.vs/ProjectSettings.json
+/.vs/slnx.sqlite

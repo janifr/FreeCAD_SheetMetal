@@ -152,6 +152,7 @@ unfold_error = {
   24: ('Unfold: bend-face without child not implemented'),
   25: ('Unfold: '),
   26: ('Unfold: not handled curve type in unbendFace'),
+  27: ('Unfold: could not sort wire'),
   -1: ('Unknown error')}
 
 
@@ -359,6 +360,9 @@ class Simple_node(object):
     self.p_wire = None           # Wire common with parent node, used for bend node
     self.c_wire = None           # Wire common with child node, used for bend node
     self.b_edges = []            # List of edges in a bend node, that needs to be recalculated, at unfolding
+    self.foldVertex1 = None # points to attach a text to a bend in a drawing
+    self.foldVertex2 = None # point to attach a text to a bend in a drawing
+    self.bendNumber = None # Number assigned to a bend, used in tables and drawings
 
   def get_Face_idx(self):
     # get the face index from the tree-element
@@ -412,6 +416,7 @@ class SheetTree(object):
     self.error_code = None
     self.failed_face_idx = None
     self.k_factor_lookup = k_factor_lookup
+    self.bendCounter = 0 # Counter to give a bend a number, stored in bendNumber in the tree structure
 
     if not self.__Shape.isValid():
       FreeCAD.Console.PrintLog("The shape is not valid!" + "\n")
@@ -1125,6 +1130,8 @@ class SheetTree(object):
 
     if F_type == "<Cylinder object>":
       newNode.node_type = 'Bend' # FIXME
+      self.bendCounter += 1
+      newNode.bendNumber = self.bendCounter # Assign a number to the bend
       s_Center = self.__Shape.Faces[face_idx].Surface.Center
       s_Axis = self.__Shape.Faces[face_idx].Surface.Axis
       newNode.axis = s_Axis
@@ -1767,6 +1774,7 @@ class SheetTree(object):
       vert = myEdgeList[eIndex].Vertexes[0]
     #Part.show(myEdgeList[0], 'tolEdge'+str(1)+'_')
     while not gotConnection:
+      foundConnection = False
       for eIdx in idxList:
         edge = myEdgeList[eIdx]
         if equal_vertex(vert, edge.Vertexes[0]):
@@ -1776,6 +1784,7 @@ class SheetTree(object):
           newIdxList.append(eIdx)
           if len(edge.Vertexes) > 1:
             vert = edge.Vertexes[1]
+          foundConnection = True
           break
         if len(edge.Vertexes) > 1:
           if equal_vertex(vert, edge.Vertexes[1]):
@@ -1784,9 +1793,15 @@ class SheetTree(object):
             #print 'found eIdx: ', eIdx
             newIdxList.append(eIdx)
             vert = edge.Vertexes[0]
+            foundConnection = True
             break
       if (len(idxList) == 0):
         gotConnection = True
+      else:
+        if not foundConnection:
+          gotConnection = True
+          self.error_code = 27  # Unfold: could not sort Wire
+          self.failed_face_idx = fIdx
       if equal_vertex(vert, startVert):
         #print 'got last connection'
         gotConnection = True
@@ -1856,6 +1871,9 @@ class SheetTree(object):
         #Part.show(lWire, 'foldLine'+str(bend_node.idx +1)+'_')
       else:
         print('FIXME! make errorcondition')
+
+    bend_node.foldVertex1 = wireList[0].Vertexes[0]
+    bend_node.foldVertex2 = wireList[-1].Vertexes[1]
 
     return wireList
 
@@ -2043,11 +2061,14 @@ class SheetTree(object):
     nodeShell = []
     theFoldLines = []
     nodeFoldLines = []
+    drawingVerts = [] # Vertexes to assign bendnumbers in a drawing
+    nodeVerts = []    # new vertexes from this node
     for n_node in node.child_list:
       if self.error_code is None:
-        shell, foldLines = self.unfold_tree2(n_node)
+        shell, foldLines, verts = self.unfold_tree2(n_node)
         theShell = theShell + shell
         theFoldLines = theFoldLines + foldLines
+        drawingVerts = drawingVerts + verts
     if node.node_type == 'Bend':
       trans_vec = node.tan_vec * node._trans_length
       for bFaces in theShell:
@@ -2056,9 +2077,14 @@ class SheetTree(object):
       for fold in theFoldLines:
         fold.rotate(self.f_list[node.idx].Surface.Center,node.axis,math.degrees(-node.bend_angle))
         fold.translate(trans_vec)
+      for dVert in drawingVerts:
+        dVert.rotate(self.f_list[node.idx].Surface.Center,node.axis,math.degrees(-node.bend_angle))
+        dVert.translate(trans_vec)
       if self.error_code is None:
         #nodeShell = self.generateBendShell(node)
         nodeShell, nodeFoldLines = self.generateBendShell2(node)
+        nodeVerts.append(node.foldVertex1)
+        nodeVerts.append(node.foldVertex2)
     else:
       if self.error_code is None:
         # nodeShell = self.generateShell(node)
@@ -2068,7 +2094,125 @@ class SheetTree(object):
         #  for seamEdge in node.seam_edges:
         #    self.makeSeamFace(seamEdge, node)
     FreeCAD.Console.PrintLog("ufo finish face" + str(node.idx +1) + "\n")
-    return (theShell + nodeShell, theFoldLines + nodeFoldLines)
+    return (theShell + nodeShell, theFoldLines + nodeFoldLines, drawingVerts + nodeVerts)
+
+  def prepareDrawing(self, folds, ufoShape):
+
+    import Draft, Spreadsheet
+
+    def traversNodeNumbers(node):
+      for n_node in node.child_list:
+        traversNodeNumbers(n_node)
+      if node.node_type == 'Bend':
+        textVert = node.foldVertex1
+        if doRotate:
+          textVert.rotate(self.root.facePosi,theAxis,math.degrees(-angle))
+        textVert.translate(-self.root.facePosi)
+
+        text = Draft.makeText([str(node.bendNumber)],point=textVert.Point)
+        text.Label = 'Bend' + str(node.bendNumber)
+#        bNums.addObject(text)
+        text.ViewObject.FontSize = 5
+        text.ViewObject.TextColor = (0.00,1.00,0.00) #green color
+        radiusQuantity = FreeCAD.Units.parseQuantity(str(node.innerRadius)+' mm')
+        radiusUnit = radiusQuantity.UserString.split(' ')[1]
+        mySheet.set('A'+str(node.bendNumber+1), str(node.bendNumber))
+        mySheet.set('B'+str(node.bendNumber+1), str(node.innerRadius)+' mm')
+        mySheet.setDisplayUnit('B'+str(node.bendNumber+1), radiusUnit)
+        mySheet.set('C'+str(node.bendNumber+1), node.bend_dir)
+        mySheet.set('D'+str(node.bendNumber+1), str(node.k_Factor/2.0)) 
+
+    # calculate the rotation in order to place the drawing data into the xy-plane
+    planeVec = Base.Vector(0.0, 0.0, 1.0) # normal of the xy-plane
+    if (not equal_vector(self.root.axis, planeVec)) and (not equal_vector(self.root.axis, -planeVec)):
+      myVec = self.root.axis # normal of the first face = normal of drawing data
+      theAxis = planeVec.cross(myVec) # rotation axis
+      angle = math.atan2(planeVec.cross(myVec).dot(theAxis), planeVec.dot(myVec))
+      doRotate = True
+    else:
+      theAxis = Base.Vector(1.0, 0.0, 0.0)
+      angle = 0.0
+      doRotate = False
+    # calculate the translation in order to place the drawing data into the xy-plane
+    transVec = self.root.facePosi
+    #print ('Posi '+ str(self.root.facePosi)+ ' Axis '+ str(theAxis)+ ' angle '+ str(angle))
+    
+    if doRotate:
+      #print ('Posi ', self.root.facePosi, ' Axis ', theAxis, ' angle ', angle)
+      folds.rotate(self.root.facePosi,theAxis,math.degrees(-angle))
+    folds.translate(-self.root.facePosi)
+
+    bLines = Draft.make_layer(name="BEND")
+    Draft.autogroup(bLines)
+    bLines.ViewObject.LineColor = (1.00,0.00,0.00) #red color
+    bLines.Group = []
+    fLineObject = FreeCAD.activeDocument().addObject("Part::Feature")
+    fLineObject.Label = 'Bendlines'
+    fLineObject.Shape = folds
+#    bLines.addObject(fLineObject)
+
+    mySheet = FreeCAD.activeDocument().addObject('Spreadsheet::Sheet','Bendtable')
+    mySheet.set('A1', 'Bendlabel')
+    mySheet.set('B1', 'Radius')
+    mySheet.set('C1', 'Direction')
+    mySheet.set('D1', 'k-Factor')
+
+    bNums = Draft.make_layer(name="Bendlabels")
+    Draft.autogroup(bLines)
+    traversNodeNumbers(self.root)
+    
+    #search for the top face in the ufoShape
+    faceList = []
+    gotFace = False
+    such_list = list(range(len(ufoShape.Faces)))
+    # search for the top face
+    for i in such_list:
+      face_found = True
+      for F_vert in ufoShape.Faces[i].Vertexes:
+        #vF_vert = F_vert.Point
+        dist_v = F_vert.Point.distanceToPlane (self.root.facePosi, self.root.axis)
+        # print "counter face distance: ", dist_v + self.__thickness
+        #print 'checking Face', str(i+1), ' dist_v: ', dist_v
+        if (dist_v > self.cFaceTol) or (dist_v < -self.cFaceTol):
+            face_found = False
+
+      if face_found:
+          faceList.append(i)
+          gotFace = True
+    
+    if gotFace:
+      if len(faceList) > 1: # check if more than one face was detected!
+        print('fix me, more than one face found')
+        
+    drawingFace = ufoShape.Faces[faceList[0]].copy()
+    if doRotate:
+      drawingFace.rotate(self.root.facePosi,theAxis,math.degrees(-angle))
+    drawingFace.translate(-self.root.facePosi)
+    #Part.show(drawingFace, 'TheFace')
+    #Part.show(drawingFace.OuterWire, 'TheWire')
+
+    outProf_VG = Draft.make_layer(name="OUTER_PROFILE")
+    Draft.autogroup(outProf_VG)
+    #if FreeCAD.GuiUp:
+    outProf_VG.ViewObject.LineColor = (0.00,0.00,1.00) #blue color
+    outProf_VG.Group = []
+    outProfObj = FreeCAD.activeDocument().addObject("Part::Feature")
+    outProfObj.Label = 'Outer_Profile_Lines'
+    outProfObj.Shape = drawingFace.OuterWire
+#    outProf_VG.addObject(outProfObj)
+
+    if len(drawingFace.Wires) >1:
+      #Part.show(Part.Compound(drawingFace.Wires[1:]), 'TheHoles')
+      intProf_VG = Draft.make_layer(name="INTERIOR_PROFILES")
+      Draft.autogroup(intProf_VG)
+      #if FreeCAD.GuiUp:
+      intProf_VG.ViewObject.LineColor = (0.00,0.00,0.80) # color
+      intProf_VG.Group = []
+      intProfObj = FreeCAD.activeDocument().addObject("Part::Feature")
+      intProfObj.Label = 'Interior_Profile_Lines'
+      intProfObj.Shape = Part.Compound(drawingFace.Wires[1:])
+#      intProf_VG.addObject(intProfObj)
+
 
 #  from Defeaturing WB: Export to Step
 def sew_Shape():
@@ -2137,6 +2281,7 @@ def getUnfold(k_factor_lookup):
     normalVect = None
     folds = None
     theName = None
+    drawVerts = None
     mylist = Gui.Selection.getSelectionEx()
     faceSel = ""; ob_Name = ""
     err_code = 0
@@ -2176,7 +2321,7 @@ def getUnfold(k_factor_lookup):
 
                 if TheTree.error_code is None:
                   # TheTree.showFaces()
-                  theFaceList, foldLines = TheTree.unfold_tree2(TheTree.root) # traverses the tree-structure
+                  theFaceList, foldLines, drawVerts = TheTree.unfold_tree2(TheTree.root) # traverses the tree-structure
                   if TheTree.error_code is None:
                     unfoldTime = time.process_time()
                     FreeCAD.Console.PrintLog("time to run the unfold: "+ str(unfoldTime - endzeit) + "\n")
@@ -2213,6 +2358,9 @@ def getUnfold(k_factor_lookup):
                         showTime = time.process_time()
                         FreeCAD.Console.PrintLog("Show time: "+ str(showTime - solidTime) + " total time: "+ str(showTime - startzeit) + "\n")
 
+                    if drawVerts is not None:
+                      TheTree.prepareDrawing(folds, resPart)
+    
               if TheTree.error_code is not None:
                 if (TheTree.error_code == 1):
                     FreeCAD.Console.PrintError("Error at Face"+ str(TheTree.failed_face_idx+1) + "\n")
