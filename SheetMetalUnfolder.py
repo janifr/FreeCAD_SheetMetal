@@ -2098,7 +2098,7 @@ class SheetTree(object):
 
   def prepareDrawing(self, folds, ufoShape):
 
-    import Draft, Spreadsheet
+    import Draft, Spreadsheet, copy
 
     def traversNodeNumbers(node):
       for n_node in node.child_list:
@@ -2136,11 +2136,12 @@ class SheetTree(object):
     # calculate the translation in order to place the drawing data into the xy-plane
     transVec = self.root.facePosi
     #print ('Posi '+ str(self.root.facePosi)+ ' Axis '+ str(theAxis)+ ' angle '+ str(angle))
-    
+
+    tempfolds = copy.deepcopy(folds)
     if doRotate:
       #print ('Posi ', self.root.facePosi, ' Axis ', theAxis, ' angle ', angle)
-      folds.rotate(self.root.facePosi,theAxis,math.degrees(-angle))
-    folds.translate(-self.root.facePosi)
+      tempfolds.rotate(self.root.facePosi,theAxis,math.degrees(-angle))
+    tempfolds.translate(-self.root.facePosi)
 
     bLines = Draft.make_layer(name="BEND")
     Draft.autogroup(bLines)
@@ -2148,7 +2149,7 @@ class SheetTree(object):
     bLines.Group = []
     fLineObject = FreeCAD.activeDocument().addObject("Part::Feature")
     fLineObject.Label = 'Bendlines'
-    fLineObject.Shape = folds
+    fLineObject.Shape = tempfolds
 #    bLines.addObject(fLineObject)
 
     mySheet = FreeCAD.activeDocument().addObject('Spreadsheet::Sheet','Bendtable')

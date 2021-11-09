@@ -2,3 +2,5 @@
 /SheetMetal2.py
 /.vs/ProjectSettings.json
 /.vs/slnx.sqlite
+*.json
+/.vs/FreeCAD_SheetMetal/v16/.suo
