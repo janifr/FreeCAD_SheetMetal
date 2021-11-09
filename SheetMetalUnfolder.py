@@ -2120,7 +2120,7 @@ class SheetTree(object):
         mySheet.set('B'+str(node.bendNumber+1), str(node.innerRadius)+' mm')
         mySheet.setDisplayUnit('B'+str(node.bendNumber+1), radiusUnit)
         mySheet.set('C'+str(node.bendNumber+1), node.bend_dir)
-        mySheet.set('D'+str(node.bendNumber+1), str(node.k_Factor/2.0)) 
+        mySheet.set('D'+str(node.bendNumber+1), str(node.k_Factor*2.0)) 
 
     # calculate the rotation in order to place the drawing data into the xy-plane
     planeVec = Base.Vector(0.0, 0.0, 1.0) # normal of the xy-plane
